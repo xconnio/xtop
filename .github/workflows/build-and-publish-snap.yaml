@@ -18,3 +18,9 @@ jobs:
         uses: snapcore/action-build@v1
         with:
           snapcraft-channel: 8.x/stable
+
+      - name: Publish the snap
+        if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: snapcraft upload xtop_*.snap --release=edge
