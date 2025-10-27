@@ -1,4 +1,4 @@
-name: Build and Publish Snap to Snap store
+name: Build and Publish Snap
 
 on:
   push:
