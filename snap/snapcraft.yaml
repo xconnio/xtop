@@ -1,0 +1,28 @@
+name: xtop
+base: core24
+version: '0.1.0'
+summary: TOP for XConn
+description: |
+  XConn CLI to manage your routers
+
+grade: stable
+confinement: strict
+
+apps:
+  xtop:
+    command: bin/xtop
+    plugs:
+      - network
+      - network-bind
+      - home
+
+parts:
+  xtop:
+    plugin: go
+    source: .
+    build-snaps:
+      - go
+    stage:
+      - bin/xtop
+    prime:
+      - bin/xtop
