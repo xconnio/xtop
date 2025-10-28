@@ -4,6 +4,7 @@ go 1.24.4
 
 require (
 	github.com/gdamore/tcell/v2 v2.9.0
+	github.com/rivo/tview v0.42.0
 	github.com/xconnio/xconn-go v0.0.0-20251027101527-31a4b4e10d62
 )
 
@@ -19,7 +20,7 @@ require (
 	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/projectdiscovery/ratelimit v0.0.50 // indirect
 	github.com/projectdiscovery/utils v0.2.3 // indirect
-	github.com/rivo/uniseg v0.4.4 // indirect
+	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect

@@ -2,25 +2,25 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
+
+	"github.com/rivo/tview"
 
 	"github.com/xconnio/xconn-go"
 	"github.com/xconnio/xtop"
 )
 
 func main() {
-	session, err := xconn.ConnectAnonymous(context.Background(), "ws://localhost:8080/ws", "realm1")
+	app := tview.NewApplication()
+	xtop.SetApp(app)
+
+	session, err := xconn.ConnectAnonymous(context.Background(), "ws://localhost:8080/ws", "io.xconn.mgmt")
 	if err != nil {
 		log.Fatalf("failed to connect: %v", err)
 	}
 
-	screen := xtop.NewScreen()
-	defer screen.Fini()
-
-	screen.PrintText(1, 1, "Hello, xtop ! (Press Esc or Ctrl-C to quit)")
-	screen.PrintText(1, 2, fmt.Sprintf("Session ID: %d", session.ID()))
-	screen.Show()
-
-	screen.RunUntilExit()
+	screen := xtop.NewXTopScreen(session)
+	if err := app.SetRoot(screen, true).EnableMouse(true).Run(); err != nil {
+		log.Fatalf("app run failed: %v", err)
+	}
 }
