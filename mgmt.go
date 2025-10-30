@@ -3,6 +3,7 @@ package xtop
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 
 	"github.com/xconnio/xconn-go"
 )
@@ -67,15 +68,23 @@ func FetchSessionDetails(s *xconn.Session, realm string) ([]SessionInfo, error) 
 	}
 
 	var sessions []SessionInfo
-	if len(resp.Args()) > 0 {
-		if raw, ok := resp.Args()[0].([]interface{}); ok {
-			for _, v := range raw {
-				if m, ok := v.(map[string]any); ok {
-					var si SessionInfo
-					b, _ := json.Marshal(m)
-					_ = json.Unmarshal(b, &si)
-					sessions = append(sessions, si)
+	if resp.ArgsLen() > 0 {
+		for _, v := range resp.ArgListOr(0, []any{}) {
+			if m, ok := v.(map[string]any); ok {
+				var si SessionInfo
+				b, err := json.Marshal(m)
+				if err != nil {
+					log.Printf("Error marshaling session info: %v", err)
+					continue
 				}
+				err = json.Unmarshal(b, &si)
+				if err != nil {
+					log.Printf("Error unmarshaling session info: %v", err)
+					continue
+				}
+				sessions = append(sessions, si)
+			} else {
+				log.Printf("Unexpected type: %T", v)
 			}
 		}
 	}

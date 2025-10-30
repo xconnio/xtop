@@ -2,6 +2,7 @@ package xtop
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -9,48 +10,15 @@ import (
 	"github.com/xconnio/xconn-go"
 )
 
-func buildHeader(session *xconn.Session) tview.Primitive {
-	header := tview.NewFlex()
-
-	info := tview.NewTextView().
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignLeft)
-	info.SetText(fmt.Sprintf(
-		"\n[white]XTOP: [yellow]v0.1.0[white]\n"+
-			"[white]XConn: [yellow]v1.0.0[white]\n"+
-			"[white]CPU: [yellow]9%%[white]\n"+
-			"[white]MEM: [yellow]26%%[white]\n"+
-			"[white]UPTIME: [yellow][white]\n"+
-			"[white]SESSION: [yellow]%d[white]", session.ID()))
-
-	logo := tview.NewTextView().
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignRight)
-	logo.SetText(`[cyan]
-██╗  ██╗████████╗ ██████╗ ██████╗ 
-╚██╗██╔╝╚══██╔══╝██╔═══██╗██╔══██╗
- ╚███╔╝    ██║   ██║   ██║██████╔╝
- ██╔██╗    ██║   ██║   ██║██╔═══╝ 
-██╔╝ ██╗   ██║   ╚██████╔╝██║     
-╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚═╝     
-[white]`)
-
-	header.AddItem(info, 0, 1, false)
-	header.AddItem(logo, 0, 1, false)
-	return header
-}
-
 func showRealmSessions(table *tview.Table, session *xconn.Session, realm string) {
-	for row := table.GetRowCount() - 1; row >= 1; row-- {
-		table.RemoveRow(row)
-	}
+	table.Clear()
 
-	sessionHeaders := []string{"SESSION ID", "AUTH ID", "AUTH ROLE", "SERIALIZER"}
-	for col, h := range sessionHeaders {
-		cell := tview.NewTableCell(fmt.Sprintf("[yellow::b]%s", h))
-		cell.SetAlign(tview.AlignLeft)
-		cell.SetSelectable(false)
-		cell.SetExpansion(1)
+	headers := []string{"SESSION ID", "AUTH ID", "AUTH ROLE", "SERIALIZER"}
+	for col, h := range headers {
+		cell := tview.NewTableCell(fmt.Sprintf("[yellow::b]%s", h)).
+			SetAlign(tview.AlignLeft).
+			SetSelectable(false).
+			SetExpansion(1)
 		table.SetCell(0, col, cell)
 	}
 
@@ -60,29 +28,27 @@ func showRealmSessions(table *tview.Table, session *xconn.Session, realm string)
 		return
 	}
 
-	for row, session := range sessions {
-		table.SetCell(row+1, 0, tview.NewTableCell(fmt.Sprintf("[white]%d", session.SessionID)).SetExpansion(1))
-		table.SetCell(row+1, 1, tview.NewTableCell("[white]"+session.AuthID).SetExpansion(1))
-		table.SetCell(row+1, 2, tview.NewTableCell("[white]"+session.AuthRole).SetExpansion(1))
-		table.SetCell(row+1, 3, tview.NewTableCell("[white]"+session.Serializer).SetExpansion(1))
+	for row, s := range sessions {
+		table.SetCell(row+1, 0, tview.NewTableCell(fmt.Sprintf("[white]%d", s.SessionID)).SetExpansion(1))
+		table.SetCell(row+1, 1, tview.NewTableCell("[white]"+s.AuthID).SetExpansion(1))
+		table.SetCell(row+1, 2, tview.NewTableCell("[white]"+s.AuthRole).SetExpansion(1))
+		table.SetCell(row+1, 3, tview.NewTableCell("[white]"+s.Serializer).SetExpansion(1))
 	}
 
-	table.SetTitle(fmt.Sprintf(" [white]%s - Sessions: %d ", realm, len(sessions)))
-	table.SetTitleColor(tcell.ColorWhite)
-	table.SetTitleAlign(tview.AlignCenter)
+	table.SetTitle(fmt.Sprintf(" [white]%s - Sessions: %d ", realm, len(sessions))).
+		SetTitleColor(tcell.ColorWhite).
+		SetTitleAlign(tview.AlignCenter)
 }
 
 func showAllRealms(table *tview.Table, session *xconn.Session) {
-	for row := table.GetRowCount() - 1; row >= 1; row-- {
-		table.RemoveRow(row)
-	}
+	table.Clear()
 
-	realmHeaders := []string{"REALMS", "CLIENTS", "MESSAGES/s", "STATUS"}
-	for col, h := range realmHeaders {
-		cell := tview.NewTableCell(fmt.Sprintf("[yellow::b]%s", h))
-		cell.SetAlign(tview.AlignLeft)
-		cell.SetSelectable(false)
-		cell.SetExpansion(1)
+	headers := []string{"REALMS", "CLIENTS", "MESSAGES/s", "STATUS"}
+	for col, h := range headers {
+		cell := tview.NewTableCell(fmt.Sprintf("[yellow::b]%s", h)).
+			SetAlign(tview.AlignLeft).
+			SetSelectable(false).
+			SetExpansion(1)
 		table.SetCell(0, col, cell)
 	}
 
@@ -119,9 +85,9 @@ func showAllRealms(table *tview.Table, session *xconn.Session) {
 		table.SetCell(row+1, 3, tview.NewTableCell(statusColor+status).SetExpansion(1))
 	}
 
-	table.SetTitle(fmt.Sprintf(" [white]Realms [%d] ", len(realms)))
-	table.SetTitleColor(tcell.ColorWhite)
-	table.SetTitleAlign(tview.AlignCenter)
+	table.SetTitle(fmt.Sprintf(" [white]Realms [%d] ", len(realms))).
+		SetTitleColor(tcell.ColorWhite).
+		SetTitleAlign(tview.AlignCenter)
 }
 
 func buildRouterTable(session *xconn.Session) *tview.Table {
@@ -144,8 +110,7 @@ func setupTableInput(table *tview.Table, session *xconn.Session) {
 			if row > 0 {
 				realms, err := FetchRealms(session)
 				if err == nil && row-1 < len(realms) {
-					realm := realms[row-1]
-					showRealmSessions(table, session, realm)
+					showRealmSessions(table, session, realms[row-1])
 				}
 			}
 			return nil
@@ -163,14 +128,70 @@ func setupTableInput(table *tview.Table, session *xconn.Session) {
 }
 
 func NewXTopScreen(session *xconn.Session) tview.Primitive {
+
 	flex := tview.NewFlex().SetDirection(tview.FlexRow)
 
-	header := buildHeader(session)
+	info := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignLeft)
+
+	logo := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignRight).
+		SetText(`[cyan]
+██╗  ██╗████████╗ ██████╗ ██████╗ 
+╚██╗██╔╝╚══██╔══╝██╔═══██╗██╔══██╗
+ ╚███╔╝    ██║   ██║   ██║██████╔╝
+ ██╔██╗    ██║   ██║   ██║██╔═══╝ 
+██╔╝ ██╗   ██║   ╚██████╔╝██║     
+╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚═╝     
+[white]`)
+
+	header := tview.NewFlex().
+		AddItem(info, 0, 1, false).
+		AddItem(logo, 0, 1, false)
+
 	table := buildRouterTable(session)
 	setupTableInput(table, session)
 
 	flex.AddItem(header, 8, 0, false)
 	flex.AddItem(table, 0, 1, true)
+
+	resp := session.Call("io.xconn.mgmt.stats.status.set").Kwarg("enable", true).Do()
+	if resp.Err != nil {
+		fmt.Printf("Could not enable stats: %v\n", resp.Err)
+	}
+
+	eventHandler := func(event *xconn.Event) {
+		args := event.Args()
+		if len(args) == 0 {
+			return
+		}
+		statsMap, ok := args[0].(map[string]any)
+		if !ok {
+			return
+		}
+		app.QueueUpdateDraw(func() {
+			info.SetText(fmt.Sprintf(
+				"\n[white]XTOP: [yellow]v0.1.0[white]\n"+
+					"[white]XConn: [yellow]v0.1.0[white]\n"+
+					"[white]CPU: [yellow]%.1f%%[white]\n"+
+					"[white]MEM: [yellow]%.1fMB[white]\n"+
+					"[white]UPTIME: [yellow]%02d:%02d:%02d[white]\n"+
+					"[white]SESSION: [yellow]%d[white]",
+				math.Min(statsMap["cpu_usage"].(float64), 100),
+				float64(statsMap["alloc"].(uint64))/(1024*1024),
+				int(statsMap["uptime"].(float64)/3600),
+				int(statsMap["uptime"].(float64))%3600/60,
+				int(statsMap["uptime"].(float64))%60,
+				session.ID()))
+		})
+	}
+
+	subResp := session.Subscribe("io.xconn.mgmt.stats.on_update", eventHandler).Do()
+	if subResp.Err != nil {
+		fmt.Printf("Error subscribing to stats: %v\n", subResp.Err)
+	}
 
 	return flex
 }
