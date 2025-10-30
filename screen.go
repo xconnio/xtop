@@ -10,6 +10,13 @@ import (
 	"github.com/xconnio/xconn-go"
 )
 
+//nolint:gochecknoglobals
+var (
+	app *tview.Application
+)
+
+func SetApp(a *tview.Application) { app = a }
+
 func showRealmSessions(table *tview.Table, session *xconn.Session, realm string) {
 	table.Clear()
 
@@ -36,6 +43,45 @@ func showRealmSessions(table *tview.Table, session *xconn.Session, realm string)
 	}
 
 	table.SetTitle(fmt.Sprintf(" [white]%s - Sessions: %d ", realm, len(sessions))).
+		SetTitleColor(tcell.ColorWhite).
+		SetTitleAlign(tview.AlignCenter)
+	table.SetSelectedFunc(func(row, col int) {
+		if row == 0 || row > len(sessions) {
+			return
+		}
+		selected := sessions[row-1]
+		showSessionLogs(table, session, realm, selected.SessionID)
+	})
+}
+
+func showSessionLogs(table *tview.Table, s *xconn.Session, realm string, sessionID uint64) {
+	table.Clear()
+
+	headers := []string{"SESSION LOGS"}
+	for col, h := range headers {
+		cell := tview.NewTableCell(fmt.Sprintf("[yellow::b]%s", h)).
+			SetAlign(tview.AlignLeft).
+			SetSelectable(false)
+		table.SetCell(0, col, cell)
+	}
+
+	row := 1
+	err := FetchSessionLogs(s, realm, sessionID, func(line string) {
+		app.QueueUpdateDraw(func() {
+			table.SetCell(row, 0, tview.NewTableCell("[white]"+line))
+			row++
+			if row > 2000 { // safety limit to prevent infinite growth
+				table.RemoveRow(1)
+				row--
+			}
+		})
+	})
+
+	if err != nil {
+		table.SetCell(1, 0, tview.NewTableCell(fmt.Sprintf("[red]%v", err)))
+	}
+
+	table.SetTitle(fmt.Sprintf(" [white]%s - Session %d Logs ", realm, sessionID)).
 		SetTitleColor(tcell.ColorWhite).
 		SetTitleAlign(tview.AlignCenter)
 }
@@ -88,6 +134,12 @@ func showAllRealms(table *tview.Table, session *xconn.Session) {
 	table.SetTitle(fmt.Sprintf(" [white]Realms [%d] ", len(realms))).
 		SetTitleColor(tcell.ColorWhite).
 		SetTitleAlign(tview.AlignCenter)
+
+	table.SetSelectedFunc(func(row, col int) {
+		if row > 0 && row-1 < len(realms) {
+			showRealmSessions(table, session, realms[row-1])
+		}
+	})
 }
 
 func buildRouterTable(session *xconn.Session) *tview.Table {
@@ -105,15 +157,6 @@ func buildRouterTable(session *xconn.Session) *tview.Table {
 func setupTableInput(table *tview.Table, session *xconn.Session) {
 	table.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
 		switch ev.Key() {
-		case tcell.KeyEnter:
-			row, _ := table.GetSelection()
-			if row > 0 {
-				realms, err := FetchRealms(session)
-				if err == nil && row-1 < len(realms) {
-					showRealmSessions(table, session, realms[row-1])
-				}
-			}
-			return nil
 		case tcell.KeyEsc:
 			showAllRealms(table, session)
 			return nil
@@ -128,7 +171,6 @@ func setupTableInput(table *tview.Table, session *xconn.Session) {
 }
 
 func NewXTopScreen(session *xconn.Session) tview.Primitive {
-
 	flex := tview.NewFlex().SetDirection(tview.FlexRow)
 
 	info := tview.NewTextView().
@@ -180,8 +222,7 @@ func NewXTopScreen(session *xconn.Session) tview.Primitive {
 					"[white]UPTIME: [yellow]%02d:%02d:%02d[white]\n"+
 					"[white]SESSION: [yellow]%d[white]",
 				math.Min(statsMap["cpu_usage"].(float64), 100),
-				float64(statsMap["alloc"].(uint64))/(1024*1024),
-				int(statsMap["uptime"].(float64)/3600),
+				float64(statsMap["res_memory"].(uint64))/(1024*1024), int(statsMap["uptime"].(float64)/3600),
 				int(statsMap["uptime"].(float64))%3600/60,
 				int(statsMap["uptime"].(float64))%60,
 				session.ID()))

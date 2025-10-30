@@ -4,8 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 
 	"github.com/xconnio/xconn-go"
+)
+
+//nolint:gochecknoglobals
+var (
+	logCache   = make(map[string][]string)
+	logCacheMu sync.Mutex
 )
 
 func FetchRealms(s *xconn.Session) ([]string, error) {
@@ -90,4 +97,49 @@ func FetchSessionDetails(s *xconn.Session, realm string) ([]SessionInfo, error) 
 	}
 
 	return sessions, nil
+}
+
+func FetchSessionLogs(s *xconn.Session, realm string, sessionID uint64, onLog func(string)) error {
+	cacheKey := fmt.Sprintf("%s:%d", realm, sessionID)
+
+	resp := s.Call("io.xconn.mgmt.session.log.set").
+		Args(realm, sessionID).
+		Kwarg("enable", true).
+		Do()
+
+	if resp.Err != nil {
+		return fmt.Errorf("failed to enable session logs: %w", resp.Err)
+	}
+
+	var topic string
+	for _, arg := range resp.Args() {
+		if m, ok := arg.(map[string]any); ok {
+			if t, ok := m["topic"].(string); ok {
+				topic = t
+				break
+			}
+		}
+	}
+
+	if topic == "" {
+		return fmt.Errorf("no log topic found in response")
+	}
+
+	handler := func(event *xconn.Event) {
+		for _, a := range event.Args() {
+			if msg, ok := a.(string); ok {
+				logCacheMu.Lock()
+				logCache[cacheKey] = append(logCache[cacheKey], msg)
+				logCacheMu.Unlock()
+				onLog(msg)
+			}
+		}
+	}
+
+	subResp := s.Subscribe(topic, handler).Do()
+	if subResp.Err != nil {
+		return fmt.Errorf("failed to subscribe to session logs: %w", subResp.Err)
+	}
+
+	return nil
 }
