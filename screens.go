@@ -2,6 +2,7 @@ package xtop
 
 import (
 	"fmt"
+	"log"
 	"math"
 
 	"github.com/gdamore/tcell/v2"
@@ -10,17 +11,29 @@ import (
 	"github.com/xconnio/xconn-go"
 )
 
-//nolint:gochecknoglobals
-var (
-	app *tview.Application
+const (
+	StatusIdle    = "Idle"
+	StatusRunning = "Running"
+	StatusOffline = "Offline"
 )
 
-func SetApp(a *tview.Application) { app = a }
+type ScreenManager struct {
+	app  *tview.Application
+	mgmt *ManagementAPI
+}
 
-func showRealmSessions(table *tview.Table, session *xconn.Session, realm string) {
+func NewScreenManager(session *xconn.Session) *ScreenManager {
+	app := tview.NewApplication()
+	return &ScreenManager{
+		app:  app,
+		mgmt: NewManagementAPI(session),
+	}
+}
+
+func (s *ScreenManager) showRealmSessions(table *tview.Table, realm string) {
 	table.Clear()
 
-	headers := []string{"SESSION ID", "AUTH ID", "AUTH ROLE", "SERIALIZER"}
+	headers := []string{"SESSION ID", "AUTHID", "AUTHROLE", "SERIALIZER"}
 	for col, h := range headers {
 		cell := tview.NewTableCell(fmt.Sprintf("[yellow::b]%s", h)).
 			SetAlign(tview.AlignLeft).
@@ -29,9 +42,10 @@ func showRealmSessions(table *tview.Table, session *xconn.Session, realm string)
 		table.SetCell(0, col, cell)
 	}
 
-	sessions, err := FetchSessionDetails(session, realm)
+	sessions, err := s.mgmt.SessionDetailsByRealm(realm)
 	if err != nil {
-		table.SetCell(1, 0, tview.NewTableCell("[red]Error fetching session details"))
+		errMsg := fmt.Sprintf("[red]Failed to fetch session details: %s", err.Error())
+		table.SetCell(1, 0, tview.NewTableCell(errMsg))
 		return
 	}
 
@@ -49,12 +63,13 @@ func showRealmSessions(table *tview.Table, session *xconn.Session, realm string)
 		if row == 0 || row > len(sessions) {
 			return
 		}
+
 		selected := sessions[row-1]
-		showSessionLogs(table, session, realm, selected.SessionID)
+		s.showSessionLogs(table, realm, selected.SessionID)
 	})
 }
 
-func showSessionLogs(table *tview.Table, s *xconn.Session, realm string, sessionID uint64) {
+func (s *ScreenManager) showSessionLogs(table *tview.Table, realm string, sessionID uint64) {
 	table.Clear()
 
 	headers := []string{"SESSION LOGS"}
@@ -66,8 +81,8 @@ func showSessionLogs(table *tview.Table, s *xconn.Session, realm string, session
 	}
 
 	row := 1
-	err := FetchSessionLogs(s, realm, sessionID, func(line string) {
-		app.QueueUpdateDraw(func() {
+	err := s.mgmt.FetchSessionLogs(realm, sessionID, func(line string) {
+		s.app.QueueUpdateDraw(func() {
 			table.SetCell(row, 0, tview.NewTableCell("[white]"+line))
 			row++
 			if row > 2000 { // safety limit to prevent infinite growth
@@ -86,7 +101,7 @@ func showSessionLogs(table *tview.Table, s *xconn.Session, realm string, session
 		SetTitleAlign(tview.AlignCenter)
 }
 
-func showAllRealms(table *tview.Table, session *xconn.Session) {
+func (s *ScreenManager) showAllRealms(table *tview.Table) {
 	table.Clear()
 
 	headers := []string{"REALMS", "CLIENTS", "MESSAGES/s", "STATUS"}
@@ -98,18 +113,19 @@ func showAllRealms(table *tview.Table, session *xconn.Session) {
 		table.SetCell(0, col, cell)
 	}
 
-	realms, err := FetchRealms(session)
+	realms, err := s.mgmt.Realms()
 	if err != nil {
 		table.SetCell(1, 0, tview.NewTableCell("[red]Error fetching realms"))
 		return
 	}
 
 	for row, realm := range realms {
-		clients, err := FetchSessions(session, realm)
+		clients, err := s.mgmt.SessionsCount(realm)
 		status := StatusIdle
 		if clients > 0 {
 			status = StatusRunning
 		}
+
 		if err != nil {
 			status = StatusOffline
 			clients = 0
@@ -137,32 +153,32 @@ func showAllRealms(table *tview.Table, session *xconn.Session) {
 
 	table.SetSelectedFunc(func(row, col int) {
 		if row > 0 && row-1 < len(realms) {
-			showRealmSessions(table, session, realms[row-1])
+			s.showRealmSessions(table, realms[row-1])
 		}
 	})
 }
 
-func buildRouterTable(session *xconn.Session) *tview.Table {
+func (s *ScreenManager) buildRouterTable() *tview.Table {
 	table := tview.NewTable()
 	table.SetSelectable(true, false)
 	table.SetFixed(1, 1)
 	table.SetBorder(true)
 	table.SetBorderColor(tcell.ColorBlue)
 
-	showAllRealms(table, session)
+	s.showAllRealms(table)
 
 	return table
 }
 
-func setupTableInput(table *tview.Table, session *xconn.Session) {
+func (s *ScreenManager) setupTableInput(table *tview.Table) {
 	table.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
 		switch ev.Key() {
 		case tcell.KeyEsc:
-			showAllRealms(table, session)
+			s.showAllRealms(table)
 			return nil
 		case tcell.KeyRune:
 			if ev.Rune() == 'q' {
-				app.Stop()
+				s.app.Stop()
 				return nil
 			}
 		}
@@ -170,7 +186,7 @@ func setupTableInput(table *tview.Table, session *xconn.Session) {
 	})
 }
 
-func NewXTopScreen(session *xconn.Session) tview.Primitive {
+func (s *ScreenManager) Run() error {
 	flex := tview.NewFlex().SetDirection(tview.FlexRow)
 
 	info := tview.NewTextView().
@@ -193,27 +209,24 @@ func NewXTopScreen(session *xconn.Session) tview.Primitive {
 		AddItem(info, 0, 1, false).
 		AddItem(logo, 0, 1, false)
 
-	table := buildRouterTable(session)
-	setupTableInput(table, session)
+	table := s.buildRouterTable()
+	s.setupTableInput(table)
 
 	flex.AddItem(header, 8, 0, false)
 	flex.AddItem(table, 0, 1, true)
 
-	resp := session.Call("io.xconn.mgmt.stats.status.set").Kwarg("enable", true).Do()
-	if resp.Err != nil {
-		fmt.Printf("Could not enable stats: %v\n", resp.Err)
+	if err := s.mgmt.RequestStats(); err != nil {
+		log.Fatalln("failed to request stats", err)
 	}
 
 	eventHandler := func(event *xconn.Event) {
-		args := event.Args()
-		if len(args) == 0 {
+		statsMap, err := event.ArgDict(0)
+		if err != nil {
+			fmt.Printf("Could not get stats: %v\n", err)
 			return
 		}
-		statsMap, ok := args[0].(map[string]any)
-		if !ok {
-			return
-		}
-		app.QueueUpdateDraw(func() {
+
+		s.app.QueueUpdateDraw(func() {
 			info.SetText(fmt.Sprintf(
 				"\n[white]XTOP: [yellow]v0.1.0[white]\n"+
 					"[white]XConn: [yellow]v0.1.0[white]\n"+
@@ -225,14 +238,14 @@ func NewXTopScreen(session *xconn.Session) tview.Primitive {
 				float64(statsMap["res_memory"].(uint64))/(1024*1024), int(statsMap["uptime"].(float64)/3600),
 				int(statsMap["uptime"].(float64))%3600/60,
 				int(statsMap["uptime"].(float64))%60,
-				session.ID()))
+				s.mgmt.session.ID()))
 		})
 	}
 
-	subResp := session.Subscribe("io.xconn.mgmt.stats.on_update", eventHandler).Do()
+	subResp := s.mgmt.session.Subscribe(xconn.ManagementTopicStats, eventHandler).Do()
 	if subResp.Err != nil {
-		fmt.Printf("Error subscribing to stats: %v\n", subResp.Err)
+		fmt.Printf("Error subscribing to stats: %v", subResp.Err)
 	}
 
-	return flex
+	return s.app.SetRoot(flex, true).EnableMouse(true).Run()
 }
