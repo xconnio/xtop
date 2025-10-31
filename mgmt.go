@@ -3,7 +3,6 @@ package xtop
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"sync"
 
 	"github.com/xconnio/xconn-go"
@@ -34,25 +33,16 @@ func (m *ManagementAPI) Realms() ([]string, error) {
 		return nil, resp.Err
 	}
 
-	for _, arg := range resp.Args() {
-		if realms, ok := arg.([]string); ok {
-			return realms, nil
-		}
-
-		if raw, ok := arg.([]interface{}); ok {
-			var realms []string
-			for _, item := range raw {
-				if str, ok := item.(string); ok {
-					realms = append(realms, str)
-				}
-			}
-			if len(realms) > 0 {
-				return realms, nil
-			}
-		}
+	var realms []string
+	for _, realm := range resp.ArgListOr(0, []any{}) {
+		realms = append(realms, realm.(string))
 	}
 
-	return nil, fmt.Errorf("could not find realm list in response")
+	if len(realms) == 0 {
+		return nil, fmt.Errorf("could not find realm list in response")
+	}
+
+	return realms, nil
 }
 
 func (m *ManagementAPI) SessionsCount(realm string) (int, error) {
@@ -61,24 +51,7 @@ func (m *ManagementAPI) SessionsCount(realm string) (int, error) {
 		return 0, resp.Err
 	}
 
-	var total int
-	if len(resp.Args()) > 0 {
-		if sessions, ok := resp.Args()[0].([]interface{}); ok {
-			total = len(sessions)
-		}
-	}
-
-	if len(resp.Args()) > 1 {
-		if kw, ok := resp.Args()[1].(map[string]any); ok {
-			if t, ok := kw["total"]; ok {
-				if f, ok := t.(float64); ok {
-					total = int(f)
-				}
-			}
-		}
-	}
-
-	return total, nil
+	return int(resp.KwargUInt64Or("total", 0)), nil //nolint: gosec
 }
 
 func (m *ManagementAPI) SessionDetailsByRealm(realm string) ([]SessionDetails, error) {
@@ -89,23 +62,13 @@ func (m *ManagementAPI) SessionDetailsByRealm(realm string) ([]SessionDetails, e
 
 	var sessions []SessionDetails
 	if resp.ArgsLen() > 0 {
-		for _, v := range resp.ArgListOr(0, []any{}) {
-			if m, ok := v.(map[string]any); ok {
-				var si SessionDetails
-				b, err := json.Marshal(m)
-				if err != nil {
-					log.Printf("Error marshaling session info: %v", err)
-					continue
-				}
-				err = json.Unmarshal(b, &si)
-				if err != nil {
-					log.Printf("Error unmarshaling session info: %v", err)
-					continue
-				}
-				sessions = append(sessions, si)
-			} else {
-				log.Printf("Unexpected type: %T", v)
-			}
+		data, err := json.Marshal(resp.ArgListOr(0, []any{}))
+		if err != nil {
+			return nil, err
+		}
+
+		if err = json.Unmarshal(data, &sessions); err != nil {
+			return nil, err
 		}
 	}
 
@@ -116,7 +79,8 @@ func (m *ManagementAPI) FetchSessionLogs(realm string, sessionID uint64, onLog f
 	cacheKey := fmt.Sprintf("%s:%d", realm, sessionID)
 
 	resp := m.session.Call(xconn.ManagementProcedureSessionLogSet).
-		Args(realm, sessionID).
+		Arg(realm).
+		Arg(sessionID).
 		Kwarg("enable", true).
 		Do()
 
@@ -124,18 +88,10 @@ func (m *ManagementAPI) FetchSessionLogs(realm string, sessionID uint64, onLog f
 		return fmt.Errorf("failed to enable session logs: %w", resp.Err)
 	}
 
-	var topic string
-	for _, arg := range resp.Args() {
-		if m, ok := arg.(map[string]any); ok {
-			if t, ok := m["topic"].(string); ok {
-				topic = t
-				break
-			}
-		}
-	}
-
-	if topic == "" {
-		return fmt.Errorf("no log topic found in response")
+	responseDict := resp.ArgDictOr(0, map[string]any{})
+	topic, ok := responseDict["topic"].(string)
+	if !ok {
+		return fmt.Errorf("could not find topic in response")
 	}
 
 	handler := func(event *xconn.Event) {
