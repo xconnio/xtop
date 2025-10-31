@@ -9,14 +9,27 @@ import (
 	"github.com/xconnio/xconn-go"
 )
 
-//nolint:gochecknoglobals
-var (
-	logCache   = make(map[string][]string)
+type ManagementAPI struct {
+	session    *xconn.Session
+	logCache   map[string][]string
 	logCacheMu sync.Mutex
-)
+}
 
-func FetchRealms(s *xconn.Session) ([]string, error) {
-	resp := s.Call("io.xconn.mgmt.realm.list").Do()
+func NewManagementAPI(session *xconn.Session) *ManagementAPI {
+	return &ManagementAPI{
+		session:    session,
+		logCache:   make(map[string][]string),
+		logCacheMu: sync.Mutex{},
+	}
+}
+
+func (m *ManagementAPI) RequestStats() error {
+	resp := m.session.Call(xconn.ManagementProcedureStatsStatusSet).Kwarg("enable", true).Do()
+	return resp.Err
+}
+
+func (m *ManagementAPI) Realms() ([]string, error) {
+	resp := m.session.Call(xconn.ManagementProcedureListRealms).Do()
 	if resp.Err != nil {
 		return nil, resp.Err
 	}
@@ -42,8 +55,8 @@ func FetchRealms(s *xconn.Session) ([]string, error) {
 	return nil, fmt.Errorf("could not find realm list in response")
 }
 
-func FetchSessions(s *xconn.Session, realm string) (int, error) {
-	resp := s.Call("io.xconn.mgmt.session.list").Arg(realm).Do()
+func (m *ManagementAPI) SessionsCount(realm string) (int, error) {
+	resp := m.session.Call(xconn.ManagementProcedureListSession).Arg(realm).Do()
 	if resp.Err != nil {
 		return 0, resp.Err
 	}
@@ -68,17 +81,17 @@ func FetchSessions(s *xconn.Session, realm string) (int, error) {
 	return total, nil
 }
 
-func FetchSessionDetails(s *xconn.Session, realm string) ([]SessionInfo, error) {
-	resp := s.Call("io.xconn.mgmt.session.list").Arg(realm).Do()
+func (m *ManagementAPI) SessionDetailsByRealm(realm string) ([]SessionDetails, error) {
+	resp := m.session.Call(xconn.ManagementProcedureListSession).Arg(realm).Do()
 	if resp.Err != nil {
 		return nil, resp.Err
 	}
 
-	var sessions []SessionInfo
+	var sessions []SessionDetails
 	if resp.ArgsLen() > 0 {
 		for _, v := range resp.ArgListOr(0, []any{}) {
 			if m, ok := v.(map[string]any); ok {
-				var si SessionInfo
+				var si SessionDetails
 				b, err := json.Marshal(m)
 				if err != nil {
 					log.Printf("Error marshaling session info: %v", err)
@@ -99,10 +112,10 @@ func FetchSessionDetails(s *xconn.Session, realm string) ([]SessionInfo, error) 
 	return sessions, nil
 }
 
-func FetchSessionLogs(s *xconn.Session, realm string, sessionID uint64, onLog func(string)) error {
+func (m *ManagementAPI) FetchSessionLogs(realm string, sessionID uint64, onLog func(string)) error {
 	cacheKey := fmt.Sprintf("%s:%d", realm, sessionID)
 
-	resp := s.Call("io.xconn.mgmt.session.log.set").
+	resp := m.session.Call(xconn.ManagementProcedureSessionLogSet).
 		Args(realm, sessionID).
 		Kwarg("enable", true).
 		Do()
@@ -128,15 +141,15 @@ func FetchSessionLogs(s *xconn.Session, realm string, sessionID uint64, onLog fu
 	handler := func(event *xconn.Event) {
 		for _, a := range event.Args() {
 			if msg, ok := a.(string); ok {
-				logCacheMu.Lock()
-				logCache[cacheKey] = append(logCache[cacheKey], msg)
-				logCacheMu.Unlock()
+				m.logCacheMu.Lock()
+				m.logCache[cacheKey] = append(m.logCache[cacheKey], msg)
+				m.logCacheMu.Unlock()
 				onLog(msg)
 			}
 		}
 	}
 
-	subResp := s.Subscribe(topic, handler).Do()
+	subResp := m.session.Subscribe(topic, handler).Do()
 	if subResp.Err != nil {
 		return fmt.Errorf("failed to subscribe to session logs: %w", subResp.Err)
 	}
