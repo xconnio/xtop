@@ -4,6 +4,7 @@ go 1.24.4
 
 require (
 	github.com/gdamore/tcell/v2 v2.9.0
+	github.com/jessevdk/go-flags v1.6.1
 	github.com/rivo/tview v0.42.0
 	github.com/xconnio/xconn-go v0.0.0-20251031142042-cc839d2ac483
 )
