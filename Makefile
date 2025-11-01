@@ -2,7 +2,7 @@ run:
 	go run ./cmd/xtop
 
 build:
-	go build ./cmd/xtop
+	CGO_ENABLED=0 go build ./cmd/xtop
 
 lint:
 	golangci-lint run
