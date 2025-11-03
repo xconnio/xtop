@@ -67,6 +67,10 @@ func (s *ScreenManager) showRealmSessions(table *tview.Table, realm string) {
 		selected := sessions[row-1]
 		s.showSessionLogs(table, realm, selected.SessionID)
 	})
+
+	s.setupTableInput(table, func() {
+		s.showAllRealms(table)
+	})
 }
 
 func (s *ScreenManager) showSessionLogs(table *tview.Table, realm string, sessionID uint64) {
@@ -85,7 +89,7 @@ func (s *ScreenManager) showSessionLogs(table *tview.Table, realm string, sessio
 		s.app.QueueUpdateDraw(func() {
 			table.SetCell(row, 0, tview.NewTableCell("[white]"+line))
 			row++
-			if row > 2000 { // safety limit to prevent infinite growth
+			if row > 2000 {
 				table.RemoveRow(1)
 				row--
 			}
@@ -99,6 +103,10 @@ func (s *ScreenManager) showSessionLogs(table *tview.Table, realm string, sessio
 	table.SetTitle(fmt.Sprintf(" [white]%s - Session %d Logs ", realm, sessionID)).
 		SetTitleColor(tcell.ColorWhite).
 		SetTitleAlign(tview.AlignCenter)
+
+	s.setupTableInput(table, func() {
+		s.showRealmSessions(table, realm)
+	})
 }
 
 func (s *ScreenManager) showAllRealms(table *tview.Table) {
@@ -156,6 +164,9 @@ func (s *ScreenManager) showAllRealms(table *tview.Table) {
 			s.showRealmSessions(table, realms[row-1])
 		}
 	})
+
+	s.setupTableInput(table, func() {
+	})
 }
 
 func (s *ScreenManager) buildRouterTable() *tview.Table {
@@ -170,12 +181,14 @@ func (s *ScreenManager) buildRouterTable() *tview.Table {
 	return table
 }
 
-func (s *ScreenManager) setupTableInput(table *tview.Table) {
+func (s *ScreenManager) setupTableInput(table *tview.Table, onEsc func()) {
 	table.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
 		switch ev.Key() {
 		case tcell.KeyEsc:
-			s.showAllRealms(table)
-			return nil
+			if onEsc != nil {
+				onEsc()
+				return nil
+			}
 		case tcell.KeyRune:
 			if ev.Rune() == 'q' {
 				s.app.Stop()
@@ -210,7 +223,6 @@ func (s *ScreenManager) Run() error {
 		AddItem(logo, 0, 1, false)
 
 	table := s.buildRouterTable()
-	s.setupTableInput(table)
 
 	flex.AddItem(header, 8, 0, false)
 	flex.AddItem(table, 0, 1, true)
