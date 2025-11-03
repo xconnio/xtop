@@ -4,12 +4,15 @@ go 1.24.4
 
 require (
 	github.com/gdamore/tcell/v2 v2.9.0
+	github.com/hpcloud/tail v1.0.0
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/rivo/tview v0.42.0
+	github.com/sirupsen/logrus v1.9.3
 	github.com/xconnio/xconn-go v0.0.0-20251031142042-cc839d2ac483
 )
 
 require (
+	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/gdamore/encoding v1.0.1 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
@@ -24,7 +27,6 @@ require (
 	github.com/projectdiscovery/utils v0.2.3 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/shirou/gopsutil v3.21.11+incompatible // indirect
-	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
@@ -38,4 +40,6 @@ require (
 	golang.org/x/term v0.34.0 // indirect
 	golang.org/x/text v0.28.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
+	gopkg.in/fsnotify.v1 v1.4.7 // indirect
+	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
 )

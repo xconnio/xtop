@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
+	"github.com/hpcloud/tail"
 	"github.com/rivo/tview"
 
 	"github.com/xconnio/xconn-go"
@@ -84,29 +86,99 @@ func (s *ScreenManager) showSessionLogs(table *tview.Table, realm string, sessio
 		table.SetCell(0, col, cell)
 	}
 
-	row := 1
-	err := s.mgmt.FetchSessionLogs(realm, sessionID, func(line string) {
-		s.app.QueueUpdateDraw(func() {
-			table.SetCell(row, 0, tview.NewTableCell("[white]"+line))
-			row++
-			if row > 2000 {
-				table.RemoveRow(1)
-				row--
-			}
-		})
-	})
-
+	logFile := "/tmp/xtop.log"
+	err := s.mgmt.FetchSessionLogs(realm, sessionID, func(_ string) {})
 	if err != nil {
 		table.SetCell(1, 0, tview.NewTableCell(fmt.Sprintf("[red]%v", err)))
+		return
 	}
 
 	table.SetTitle(fmt.Sprintf(" [white]%s - Session %d Logs ", realm, sessionID)).
 		SetTitleColor(tcell.ColorWhite).
 		SetTitleAlign(tview.AlignCenter)
 
-	s.setupTableInput(table, func() {
-		s.showRealmSessions(table, realm)
+	stop := make(chan struct{})
+	stopped := false
+	autoScroll := true
+
+	table.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
+		switch ev.Key() {
+		case tcell.KeyEsc:
+			if !stopped {
+				stopped = true
+				close(stop)
+			}
+			s.showRealmSessions(table, realm)
+			return nil
+		case tcell.KeyRune:
+			if ev.Rune() == 'q' {
+				if !stopped {
+					stopped = true
+					close(stop)
+				}
+				s.app.Stop()
+				return nil
+			}
+		}
+		return ev
 	})
+
+	go func() {
+		t, err := tail.TailFile(logFile, tail.Config{
+			Follow:    true,
+			ReOpen:    true,
+			MustExist: true,
+			Poll:      false,
+			Logger:    tail.DiscardingLogger,
+		})
+		if err != nil {
+			s.app.QueueUpdateDraw(func() {
+				table.SetCell(1, 0, tview.NewTableCell(fmt.Sprintf("[red]Tail error: %v", err)))
+			})
+			return
+		}
+		defer t.Cleanup()
+
+		row := 1
+		buffer := make([]string, 0, 500)
+		ticker := time.NewTicker(80 * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-stop:
+				_ = t.Stop()
+				return
+			case line, ok := <-t.Lines:
+				if !ok {
+					return
+				}
+				buffer = append(buffer, line.Text)
+				if len(buffer) > 1000 {
+					buffer = buffer[len(buffer)-1000:]
+				}
+			case <-ticker.C:
+				s.app.QueueUpdateDraw(func() {
+					if len(buffer) > 0 {
+						for _, line := range buffer {
+							table.SetCell(row, 0, tview.NewTableCell("[white]"+line).
+								SetExpansion(1).
+								SetAlign(tview.AlignLeft))
+							row++
+							if row > 2000 {
+								table.RemoveRow(1)
+								row--
+							}
+						}
+						buffer = buffer[:0]
+						if autoScroll {
+							table.ScrollToEnd()
+						}
+					}
+				})
+			}
+		}
+	}()
 }
 
 func (s *ScreenManager) showAllRealms(table *tview.Table) {
@@ -165,8 +237,7 @@ func (s *ScreenManager) showAllRealms(table *tview.Table) {
 		}
 	})
 
-	s.setupTableInput(table, func() {
-	})
+	s.setupTableInput(table, func() {})
 }
 
 func (s *ScreenManager) buildRouterTable() *tview.Table {
@@ -245,12 +316,16 @@ func (s *ScreenManager) Run() error {
 					"[white]CPU: [yellow]%.1f%%[white]\n"+
 					"[white]MEM: [yellow]%.1fMB[white]\n"+
 					"[white]UPTIME: [yellow]%02d:%02d:%02d[white]\n"+
+					"[white]MESSAGES/s: [yellow]%d[white]\n"+
 					"[white]SESSION: [yellow]%d[white]",
 				math.Min(statsMap["cpu_usage"].(float64), 100),
-				float64(statsMap["res_memory"].(uint64))/(1024*1024), int(statsMap["uptime"].(float64)/3600),
+				float64(statsMap["res_memory"].(uint64))/(1024*1024),
+				int(statsMap["uptime"].(float64)/3600),
 				int(statsMap["uptime"].(float64))%3600/60,
 				int(statsMap["uptime"].(float64))%60,
-				s.mgmt.session.ID()))
+				statsMap["messages_per_second"].(uint64),
+				s.mgmt.session.ID(),
+			))
 		})
 	}
 
