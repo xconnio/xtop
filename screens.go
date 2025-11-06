@@ -232,11 +232,12 @@ func (s *ScreenManager) Run() error {
 	}
 
 	eventHandler := func(event *xconn.Event) {
-		statsMap, err := event.ArgDict(0)
+		statsDict, err := event.ArgDict(0)
 		if err != nil {
 			fmt.Printf("Could not get stats: %v\n", err)
 			return
 		}
+		statsMap := statsDict.Raw()
 
 		s.app.QueueUpdateDraw(func() {
 			info.SetText(fmt.Sprintf(

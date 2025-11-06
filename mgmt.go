@@ -34,8 +34,11 @@ func (m *ManagementAPI) Realms() ([]string, error) {
 	}
 
 	var realms []string
-	for _, realm := range resp.ArgListOr(0, []any{}) {
-		realms = append(realms, realm.(string))
+	for _, realm := range resp.ArgListOr(0, xconn.List{}) {
+		rlm, err := realm.String()
+		if err == nil {
+			realms = append(realms, rlm)
+		}
 	}
 
 	if len(realms) == 0 {
@@ -62,7 +65,8 @@ func (m *ManagementAPI) SessionDetailsByRealm(realm string) ([]SessionDetails, e
 
 	var sessions []SessionDetails
 	if resp.ArgsLen() > 0 {
-		data, err := json.Marshal(resp.ArgListOr(0, []any{}))
+		list := resp.ArgListOr(0, xconn.List{})
+		data, err := json.Marshal(list.Raw())
 		if err != nil {
 			return nil, err
 		}
@@ -88,15 +92,17 @@ func (m *ManagementAPI) FetchSessionLogs(realm string, sessionID uint64, onLog f
 		return fmt.Errorf("failed to enable session logs: %w", resp.Err)
 	}
 
-	responseDict := resp.ArgDictOr(0, map[string]any{})
-	topic, ok := responseDict["topic"].(string)
-	if !ok {
+	responseDict := resp.ArgDictOr(0, xconn.Dict{})
+	topic, err := responseDict.String("topic")
+	if err != nil {
 		return fmt.Errorf("could not find topic in response")
 	}
 
 	handler := func(event *xconn.Event) {
-		for _, a := range event.Args() {
-			if msg, ok := a.(string); ok {
+		eventMap, err := event.ArgDict(0)
+		if err == nil {
+			msg, err := eventMap.String("message")
+			if err == nil {
 				m.logCacheMu.Lock()
 				m.logCache[cacheKey] = append(m.logCache[cacheKey], msg)
 				m.logCacheMu.Unlock()
