@@ -6,7 +6,7 @@ require (
 	github.com/gdamore/tcell/v2 v2.9.0
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/rivo/tview v0.42.0
-	github.com/xconnio/xconn-go v0.0.0-20251031142042-cc839d2ac483
+	github.com/xconnio/xconn-go v0.0.0-20251106101902-5ad072f15c12
 )
 
 require (
@@ -30,7 +30,7 @@ require (
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
-	github.com/xconnio/wampproto-go v0.0.0-20251013095945-aeb962e7ed9a // indirect
+	github.com/xconnio/wampproto-go v0.0.0-20251105154130-632905d8a3d9 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	golang.org/x/crypto v0.33.0 // indirect
 	golang.org/x/exp v0.0.0-20240525044651-4c93da0ed11d // indirect
