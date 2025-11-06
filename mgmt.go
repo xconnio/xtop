@@ -9,16 +9,17 @@ import (
 )
 
 type ManagementAPI struct {
-	session    *xconn.Session
-	logCache   map[string][]string
-	logCacheMu sync.Mutex
+	session      *xconn.Session
+	logCache     map[string][]string
+	subscription xconn.SubscribeResponse
+
+	sync.Mutex
 }
 
 func NewManagementAPI(session *xconn.Session) *ManagementAPI {
 	return &ManagementAPI{
-		session:    session,
-		logCache:   make(map[string][]string),
-		logCacheMu: sync.Mutex{},
+		session:  session,
+		logCache: make(map[string][]string),
 	}
 }
 
@@ -103,9 +104,9 @@ func (m *ManagementAPI) FetchSessionLogs(realm string, sessionID uint64, onLog f
 		if err == nil {
 			msg, err := eventMap.String("message")
 			if err == nil {
-				m.logCacheMu.Lock()
+				m.Lock()
 				m.logCache[cacheKey] = append(m.logCache[cacheKey], msg)
-				m.logCacheMu.Unlock()
+				m.Unlock()
 				onLog(msg)
 			}
 		}
@@ -115,6 +116,10 @@ func (m *ManagementAPI) FetchSessionLogs(realm string, sessionID uint64, onLog f
 	if subResp.Err != nil {
 		return fmt.Errorf("failed to subscribe to session logs: %w", subResp.Err)
 	}
+
+	m.Lock()
+	m.subscription = subResp
+	m.Unlock()
 
 	return nil
 }
