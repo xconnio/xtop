@@ -3,23 +3,38 @@ package xtop
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
+
+	"github.com/sirupsen/logrus"
 
 	"github.com/xconnio/xconn-go"
 )
 
 type ManagementAPI struct {
-	session      *xconn.Session
-	logCache     map[string][]string
-	subscription xconn.SubscribeResponse
-
+	logCache map[string][]string
 	sync.Mutex
+	session      *xconn.Session
+	logger       *logrus.Logger
+	activeLogs   map[string]bool
+	mu           sync.Mutex
+	subscription xconn.SubscribeResponse
 }
 
 func NewManagementAPI(session *xconn.Session) *ManagementAPI {
+	logger := logrus.New()
+	logger.SetFormatter(&logrus.TextFormatter{
+		DisableTimestamp: true,
+		ForceColors:      false,
+	})
+	file, _ := os.OpenFile("/tmp/xtop.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	logger.SetOutput(file)
+
 	return &ManagementAPI{
-		session:  session,
-		logCache: make(map[string][]string),
+		logCache:   make(map[string][]string),
+		session:    session,
+		logger:     logger,
+		activeLogs: make(map[string]bool),
 	}
 }
 
@@ -55,7 +70,7 @@ func (m *ManagementAPI) SessionsCount(realm string) (int, error) {
 		return 0, resp.Err
 	}
 
-	return int(resp.KwargUInt64Or("total", 0)), nil //nolint: gosec
+	return int(resp.KwargUInt64Or("total", 0)), nil //nolint:gosec
 }
 
 func (m *ManagementAPI) SessionDetailsByRealm(realm string) ([]SessionDetails, error) {
@@ -81,7 +96,14 @@ func (m *ManagementAPI) SessionDetailsByRealm(realm string) ([]SessionDetails, e
 }
 
 func (m *ManagementAPI) FetchSessionLogs(realm string, sessionID uint64, onLog func(string)) error {
-	cacheKey := fmt.Sprintf("%s:%d", realm, sessionID)
+	logFile := "/tmp/xtop.log"
+	_ = os.Remove(logFile)
+
+	file, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fmt.Errorf("failed to open log file: %w", err)
+	}
+	m.logger.SetOutput(file)
 
 	resp := m.session.Call(xconn.ManagementProcedureSessionLogSet).
 		Arg(realm).
@@ -90,36 +112,40 @@ func (m *ManagementAPI) FetchSessionLogs(realm string, sessionID uint64, onLog f
 		Do()
 
 	if resp.Err != nil {
+		file.Close()
+		os.Remove(logFile)
 		return fmt.Errorf("failed to enable session logs: %w", resp.Err)
 	}
 
 	responseDict := resp.ArgDictOr(0, xconn.Dict{})
 	topic, err := responseDict.String("topic")
 	if err != nil {
+		file.Close()
+		os.Remove(logFile)
 		return fmt.Errorf("could not find topic in response")
 	}
 
+	m.mu.Lock()
+	m.activeLogs[logFile] = true
+	m.mu.Unlock()
+
 	handler := func(event *xconn.Event) {
-		eventMap, err := event.ArgDict(0)
-		if err == nil {
-			msg, err := eventMap.String("message")
-			if err == nil {
-				m.Lock()
-				m.logCache[cacheKey] = append(m.logCache[cacheKey], msg)
-				m.Unlock()
-				onLog(msg)
+		for _, a := range event.Args() {
+			msg, ok := a.(string)
+			if !ok {
+				continue
 			}
+			m.logger.Info(msg)
+			onLog(msg)
 		}
 	}
 
 	subResp := m.session.Subscribe(topic, handler).Do()
 	if subResp.Err != nil {
+		file.Close()
+		os.Remove(logFile)
 		return fmt.Errorf("failed to subscribe to session logs: %w", subResp.Err)
 	}
-
-	m.Lock()
-	m.subscription = subResp
-	m.Unlock()
 
 	return nil
 }
