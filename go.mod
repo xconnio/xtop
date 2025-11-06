@@ -6,7 +6,7 @@ require (
 	github.com/gdamore/tcell/v2 v2.9.0
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/rivo/tview v0.42.0
-	github.com/xconnio/xconn-go v0.0.0-20251106101902-5ad072f15c12
+	github.com/xconnio/xconn-go v0.0.0-20251106144142-2575c7543009
 )
 
 require (
