@@ -105,6 +105,13 @@ func (s *ScreenManager) showSessionLogs(table *tview.Table, realm string, sessio
 		SetTitleAlign(tview.AlignCenter)
 
 	s.setupTableInput(table, func() {
+		var sub xconn.SubscribeResponse
+		s.mgmt.Lock()
+		sub = s.mgmt.subscription
+		s.mgmt.Unlock()
+
+		_ = sub.Unsubscribe()
+
 		s.showRealmSessions(table, realm)
 	})
 }
