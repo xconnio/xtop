@@ -12,14 +12,17 @@ type ManagementAPI struct {
 	session      *xconn.Session
 	logCache     map[string][]string
 	subscription xconn.SubscribeResponse
+	shutdown     chan struct{}
+	closed       bool
 
-	sync.Mutex
+	sync.RWMutex
 }
 
 func NewManagementAPI(session *xconn.Session) *ManagementAPI {
 	return &ManagementAPI{
 		session:  session,
 		logCache: make(map[string][]string),
+		shutdown: make(chan struct{}),
 	}
 }
 
@@ -29,6 +32,14 @@ func (m *ManagementAPI) RequestStats() error {
 }
 
 func (m *ManagementAPI) Realms() ([]string, error) {
+	m.RLock()
+	closed := m.closed
+	m.RUnlock()
+
+	if closed {
+		return nil, fmt.Errorf("management API is closed")
+	}
+
 	resp := m.session.Call(xconn.ManagementProcedureListRealms).Do()
 	if resp.Err != nil {
 		return nil, resp.Err
@@ -49,16 +60,32 @@ func (m *ManagementAPI) Realms() ([]string, error) {
 	return realms, nil
 }
 
-func (m *ManagementAPI) SessionsCount(realm string) (int, error) {
+func (m *ManagementAPI) SessionsCount(realm string) (uint64, error) {
+	m.RLock()
+	closed := m.closed
+	m.RUnlock()
+
+	if closed {
+		return 0, fmt.Errorf("management API is closed")
+	}
+
 	resp := m.session.Call(xconn.ManagementProcedureListSession).Arg(realm).Do()
 	if resp.Err != nil {
 		return 0, resp.Err
 	}
 
-	return int(resp.KwargUInt64Or("total", 0)), nil //nolint: gosec
+	return resp.KwargUInt64Or("total", 0), nil
 }
 
 func (m *ManagementAPI) SessionDetailsByRealm(realm string) ([]SessionDetails, error) {
+	m.RLock()
+	closed := m.closed
+	m.RUnlock()
+
+	if closed {
+		return nil, fmt.Errorf("management API is closed")
+	}
+
 	resp := m.session.Call(xconn.ManagementProcedureListSession).Arg(realm).Do()
 	if resp.Err != nil {
 		return nil, resp.Err
@@ -71,7 +98,6 @@ func (m *ManagementAPI) SessionDetailsByRealm(realm string) ([]SessionDetails, e
 		if err != nil {
 			return nil, err
 		}
-
 		if err = json.Unmarshal(data, &sessions); err != nil {
 			return nil, err
 		}
@@ -81,6 +107,12 @@ func (m *ManagementAPI) SessionDetailsByRealm(realm string) ([]SessionDetails, e
 }
 
 func (m *ManagementAPI) FetchSessionLogs(realm string, sessionID uint64, onLog func(string)) error {
+	m.Lock()
+	if m.closed {
+		m.Unlock()
+		return fmt.Errorf("management API is closed")
+	}
+
 	cacheKey := fmt.Sprintf("%s:%d", realm, sessionID)
 
 	resp := m.session.Call(xconn.ManagementProcedureSessionLogSet).
@@ -90,21 +122,32 @@ func (m *ManagementAPI) FetchSessionLogs(realm string, sessionID uint64, onLog f
 		Do()
 
 	if resp.Err != nil {
+		m.Unlock()
 		return fmt.Errorf("failed to enable session logs: %w", resp.Err)
 	}
 
 	responseDict := resp.ArgDictOr(0, xconn.Dict{})
 	topic, err := responseDict.String("topic")
 	if err != nil {
+		m.Unlock()
 		return fmt.Errorf("could not find topic in response")
 	}
 
 	handler := func(event *xconn.Event) {
+		select {
+		case <-m.shutdown:
+			return
+		default:
+		}
+
 		eventMap, err := event.ArgDict(0)
 		if err == nil {
 			msg, err := eventMap.String("message")
 			if err == nil {
 				m.Lock()
+				if len(m.logCache[cacheKey]) >= 2000 {
+					m.logCache[cacheKey] = m.logCache[cacheKey][1:]
+				}
 				m.logCache[cacheKey] = append(m.logCache[cacheKey], msg)
 				m.Unlock()
 				onLog(msg)
@@ -114,12 +157,39 @@ func (m *ManagementAPI) FetchSessionLogs(realm string, sessionID uint64, onLog f
 
 	subResp := m.session.Subscribe(topic, handler).Do()
 	if subResp.Err != nil {
+		m.Unlock()
 		return fmt.Errorf("failed to subscribe to session logs: %w", subResp.Err)
 	}
 
-	m.Lock()
 	m.subscription = subResp
 	m.Unlock()
-
 	return nil
+}
+
+func (m *ManagementAPI) StopSessionLogs() {
+	m.Lock()
+	sub := m.subscription
+	closed := m.closed
+	m.Unlock()
+
+	if !closed {
+		_ = sub.Unsubscribe()
+	}
+}
+
+func (m *ManagementAPI) Close() {
+	m.Lock()
+	if m.closed {
+		m.Unlock()
+		return
+	}
+	m.closed = true
+	close(m.shutdown)
+	sub := m.subscription
+	m.logCache = make(map[string][]string)
+	m.Unlock()
+
+	if !m.closed {
+		_ = sub.Unsubscribe()
+	}
 }

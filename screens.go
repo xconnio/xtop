@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"sync"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -18,15 +19,18 @@ const (
 )
 
 type ScreenManager struct {
-	app  *tview.Application
-	mgmt *ManagementAPI
+	app      *tview.Application
+	mgmt     *ManagementAPI
+	shutdown chan struct{}
+	wg       sync.WaitGroup
 }
 
 func NewScreenManager(session *xconn.Session) *ScreenManager {
 	app := tview.NewApplication()
 	return &ScreenManager{
-		app:  app,
-		mgmt: NewManagementAPI(session),
+		app:      app,
+		mgmt:     NewManagementAPI(session),
+		shutdown: make(chan struct{}),
 	}
 }
 
@@ -84,16 +88,39 @@ func (s *ScreenManager) showSessionLogs(table *tview.Table, realm string, sessio
 		table.SetCell(0, col, cell)
 	}
 
-	row := 1
-	err := s.mgmt.FetchSessionLogs(realm, sessionID, func(line string) {
-		s.app.QueueUpdateDraw(func() {
-			table.SetCell(row, 0, tview.NewTableCell("[white]"+line))
-			row++
-			if row > 2000 {
-				table.RemoveRow(1)
-				row--
+	logUpdates := make(chan string, 100)
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		row := 1
+
+		for {
+			select {
+			case line, ok := <-logUpdates:
+				if !ok {
+					return
+				}
+				s.app.QueueUpdateDraw(func() {
+					if row > 2000 {
+						table.RemoveRow(1)
+					} else {
+						row++
+					}
+					table.SetCell(row, 0, tview.NewTableCell("[white]"+line))
+					table.ScrollToEnd()
+				})
+			case <-s.shutdown:
+				return
 			}
-		})
+		}
+	}()
+
+	err := s.mgmt.FetchSessionLogs(realm, sessionID, func(line string) {
+		select {
+		case logUpdates <- line:
+		default:
+		}
 	})
 
 	if err != nil {
@@ -105,13 +132,8 @@ func (s *ScreenManager) showSessionLogs(table *tview.Table, realm string, sessio
 		SetTitleAlign(tview.AlignCenter)
 
 	s.setupTableInput(table, func() {
-		var sub xconn.SubscribeResponse
-		s.mgmt.Lock()
-		sub = s.mgmt.subscription
-		s.mgmt.Unlock()
-
-		_ = sub.Unsubscribe()
-
+		s.mgmt.StopSessionLogs()
+		close(logUpdates)
 		s.showRealmSessions(table, realm)
 	})
 }
@@ -198,9 +220,12 @@ func (s *ScreenManager) setupTableInput(table *tview.Table, onEsc func()) {
 			}
 		case tcell.KeyRune:
 			if ev.Rune() == 'q' {
-				s.app.Stop()
+				s.Stop()
 				return nil
 			}
+		case tcell.KeyCtrlC:
+			s.Stop()
+			return nil
 		}
 		return ev
 	})
@@ -235,37 +260,72 @@ func (s *ScreenManager) Run() error {
 	flex.AddItem(table, 0, 1, true)
 
 	if err := s.mgmt.RequestStats(); err != nil {
-		log.Fatalln("failed to request stats", err)
+		log.Printf("failed to request stats: %v", err)
 	}
+
+	statsUpdates := make(chan map[string]interface{}, 10)
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer close(statsUpdates)
+
+		for {
+			select {
+			case statsMap, ok := <-statsUpdates:
+				if !ok {
+					return
+				}
+				s.app.QueueUpdateDraw(func() {
+					cpuUsage := math.Min(statsMap["cpu_usage"].(float64), 100)
+					memUsage := float64(statsMap["res_memory"].(uint64)) / (1024 * 1024)
+					uptime := statsMap["uptime"].(float64)
+					info.SetText(fmt.Sprintf(
+						"\n[white]XTOP: [yellow]v0.1.0[white]\n"+
+							"[white]XConn: [yellow]v0.1.0[white]\n"+
+							"[white]CPU: [yellow]%.1f%%[white]\n"+
+							"[white]MEM: [yellow]%.1fMB[white]\n"+
+							"[white]UPTIME: [yellow]%02d:%02d:%02d[white]\n"+
+							"[white]SESSION: [yellow]%d[white]",
+						cpuUsage, memUsage, int(uptime/3600),
+						int(uptime)%3600/60, int(uptime)%60,
+						s.mgmt.session.ID()))
+				})
+			case <-s.shutdown:
+				return
+			}
+		}
+	}()
 
 	eventHandler := func(event *xconn.Event) {
 		statsDict, err := event.ArgDict(0)
 		if err != nil {
-			fmt.Printf("Could not get stats: %v\n", err)
 			return
 		}
 		statsMap := statsDict.Raw()
-
-		s.app.QueueUpdateDraw(func() {
-			info.SetText(fmt.Sprintf(
-				"\n[white]XTOP: [yellow]v0.1.0[white]\n"+
-					"[white]XConn: [yellow]v0.1.0[white]\n"+
-					"[white]CPU: [yellow]%.1f%%[white]\n"+
-					"[white]MEM: [yellow]%.1fMB[white]\n"+
-					"[white]UPTIME: [yellow]%02d:%02d:%02d[white]\n"+
-					"[white]SESSION: [yellow]%d[white]",
-				math.Min(statsMap["cpu_usage"].(float64), 100),
-				float64(statsMap["res_memory"].(uint64))/(1024*1024), int(statsMap["uptime"].(float64)/3600),
-				int(statsMap["uptime"].(float64))%3600/60,
-				int(statsMap["uptime"].(float64))%60,
-				s.mgmt.session.ID()))
-		})
+		select {
+		case statsUpdates <- statsMap:
+		default:
+		}
 	}
 
 	subResp := s.mgmt.session.Subscribe(xconn.ManagementTopicStats, eventHandler).Do()
 	if subResp.Err != nil {
-		fmt.Printf("Error subscribing to stats: %v", subResp.Err)
+		log.Printf("Error subscribing to stats: %v", subResp.Err)
 	}
 
-	return s.app.SetRoot(flex, true).EnableMouse(true).Run()
+	err := s.app.SetRoot(flex, true).EnableMouse(true).Run()
+	s.Stop()
+	return err
+}
+
+func (s *ScreenManager) Stop() {
+	close(s.shutdown)
+	if s.app != nil {
+		s.app.Stop()
+	}
+	if s.mgmt != nil {
+		s.mgmt.Close()
+	}
+	s.wg.Wait()
 }
