@@ -5,6 +5,7 @@ import (
 	"log"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -40,74 +41,91 @@ func (s *ScreenManager) showRealmSessions(table *tview.Table, realm string) {
 	headers := []string{"SESSION ID", "AUTHID", "AUTHROLE", "SERIALIZER"}
 	for col, h := range headers {
 		cell := tview.NewTableCell(fmt.Sprintf("[yellow::b]%s", h)).
-			SetAlign(tview.AlignLeft).
-			SetSelectable(false).
-			SetExpansion(1)
+			SetAlign(tview.AlignLeft).SetSelectable(false).SetExpansion(1)
 		table.SetCell(0, col, cell)
 	}
 
 	sessions, err := s.mgmt.SessionDetailsByRealm(realm)
 	if err != nil {
-		errMsg := fmt.Sprintf("[red]Failed to fetch session details: %s", err.Error())
-		table.SetCell(1, 0, tview.NewTableCell(errMsg))
+		table.SetCell(1, 0, tview.NewTableCell(fmt.Sprintf("[red]%s", err.Error())))
 		return
 	}
 
-	for row, s := range sessions {
-		table.SetCell(row+1, 0, tview.NewTableCell(fmt.Sprintf("[white]%d", s.SessionID)).SetExpansion(1))
-		table.SetCell(row+1, 1, tview.NewTableCell("[white]"+s.AuthID).SetExpansion(1))
-		table.SetCell(row+1, 2, tview.NewTableCell("[white]"+s.AuthRole).SetExpansion(1))
-		table.SetCell(row+1, 3, tview.NewTableCell("[white]"+s.Serializer).SetExpansion(1))
+	for row, sd := range sessions {
+		table.SetCell(row+1, 0, tview.NewTableCell(fmt.Sprintf("[white]%d", sd.SessionID)).SetExpansion(1))
+		table.SetCell(row+1, 1, tview.NewTableCell("[white]"+sd.AuthID).SetExpansion(1))
+		table.SetCell(row+1, 2, tview.NewTableCell("[white]"+sd.AuthRole).SetExpansion(1))
+		table.SetCell(row+1, 3, tview.NewTableCell("[white]"+sd.Serializer).SetExpansion(1))
 	}
 
 	table.SetTitle(fmt.Sprintf(" [white]%s - Sessions: %d ", realm, len(sessions))).
-		SetTitleColor(tcell.ColorWhite).
-		SetTitleAlign(tview.AlignCenter)
-	table.SetSelectedFunc(func(row, col int) {
+		SetTitleColor(tcell.ColorWhite).SetTitleAlign(tview.AlignCenter)
+
+	table.SetSelectedFunc(func(row, _ int) {
 		if row == 0 || row > len(sessions) {
 			return
 		}
-
 		selected := sessions[row-1]
 		s.showSessionLogs(table, realm, selected.SessionID)
 	})
 
-	s.setupTableInput(table, func() {
-		s.showAllRealms(table)
-	})
+	s.setupTableInput(table, func() { s.showAllRealms(table) })
 }
 
 func (s *ScreenManager) showSessionLogs(table *tview.Table, realm string, sessionID uint64) {
 	table.Clear()
+	table.SetCell(0, 0, tview.NewTableCell("[yellow::b]SESSION LOGS").
+		SetAlign(tview.AlignLeft).SetSelectable(false))
 
-	headers := []string{"SESSION LOGS"}
-	for col, h := range headers {
-		cell := tview.NewTableCell(fmt.Sprintf("[yellow::b]%s", h)).
-			SetAlign(tview.AlignLeft).
-			SetSelectable(false)
-		table.SetCell(0, col, cell)
-	}
-
-	logUpdates := make(chan string, 100)
+	const maxRows = 2000
+	active := true
+	logUpdates := make(chan string, 500)
 
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
 		row := 1
+		var buffer []string
+		var mu sync.Mutex
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
 
 		for {
 			select {
 			case line, ok := <-logUpdates:
-				if !ok {
+				if !ok || !active {
 					return
 				}
+				mu.Lock()
+				buffer = append(buffer, line)
+				if len(buffer) > 100 {
+					buffer = buffer[len(buffer)-100:]
+				}
+				mu.Unlock()
+
+			case <-ticker.C:
+				if !active {
+					return
+				}
+				mu.Lock()
+				lines := buffer
+				buffer = nil
+				mu.Unlock()
+				if len(lines) == 0 {
+					continue
+				}
 				s.app.QueueUpdateDraw(func() {
-					if row > 2000 {
-						table.RemoveRow(1)
-					} else {
-						row++
+					if !active {
+						return
 					}
-					table.SetCell(row, 0, tview.NewTableCell("[white]"+line))
+					for _, l := range lines {
+						table.SetCell(row, 0, tview.NewTableCell("[white]"+l))
+						row++
+						if row > maxRows {
+							table.RemoveRow(1)
+							row = maxRows
+						}
+					}
 					table.ScrollToEnd()
 				})
 			case <-s.shutdown:
@@ -116,37 +134,49 @@ func (s *ScreenManager) showSessionLogs(table *tview.Table, realm string, sessio
 		}
 	}()
 
-	err := s.mgmt.FetchSessionLogs(realm, sessionID, func(line string) {
+	sendLog := func(line string) {
+		if !active {
+			return
+		}
 		select {
 		case logUpdates <- line:
 		default:
+			select {
+			case <-logUpdates:
+			default:
+			}
+			select {
+			case logUpdates <- line:
+			default:
+			}
 		}
-	})
+	}
 
+	err := s.mgmt.FetchSessionLogs(realm, sessionID, sendLog)
 	if err != nil {
-		table.SetCell(1, 0, tview.NewTableCell(fmt.Sprintf("[red]%v", err)))
+		table.SetCell(1, 0, tview.NewTableCell(fmt.Sprintf("[red]subscribe to session logs failed: %v", err)))
 	}
 
 	table.SetTitle(fmt.Sprintf(" [white]%s - Session %d Logs ", realm, sessionID)).
-		SetTitleColor(tcell.ColorWhite).
-		SetTitleAlign(tview.AlignCenter)
+		SetTitleColor(tcell.ColorWhite).SetTitleAlign(tview.AlignCenter)
 
+	var once sync.Once
 	s.setupTableInput(table, func() {
-		s.mgmt.StopSessionLogs()
-		close(logUpdates)
-		s.showRealmSessions(table, realm)
+		once.Do(func() {
+			active = false
+			s.mgmt.StopSessionLogs()
+			close(logUpdates)
+			s.showRealmSessions(table, realm)
+		})
 	})
 }
 
 func (s *ScreenManager) showAllRealms(table *tview.Table) {
 	table.Clear()
-
 	headers := []string{"REALMS", "CLIENTS", "MESSAGES/s", "STATUS"}
 	for col, h := range headers {
 		cell := tview.NewTableCell(fmt.Sprintf("[yellow::b]%s", h)).
-			SetAlign(tview.AlignLeft).
-			SetSelectable(false).
-			SetExpansion(1)
+			SetAlign(tview.AlignLeft).SetSelectable(false).SetExpansion(1)
 		table.SetCell(0, col, cell)
 	}
 
@@ -162,51 +192,38 @@ func (s *ScreenManager) showAllRealms(table *tview.Table) {
 		if clients > 0 {
 			status = StatusRunning
 		}
-
 		if err != nil {
 			status = StatusOffline
 			clients = 0
 		}
 
-		statusColor := "[white]"
-		switch status {
-		case StatusRunning:
-			statusColor = "[green]"
-		case StatusIdle:
-			statusColor = "[yellow]"
-		case StatusOffline:
-			statusColor = "[red]"
-		}
+		color := map[string]string{
+			StatusRunning: "[green]",
+			StatusIdle:    "[yellow]",
+			StatusOffline: "[red]",
+		}[status]
 
 		table.SetCell(row+1, 0, tview.NewTableCell("[white]"+realm).SetExpansion(1))
 		table.SetCell(row+1, 1, tview.NewTableCell(fmt.Sprintf("[white]%d", clients)).SetExpansion(1))
 		table.SetCell(row+1, 2, tview.NewTableCell("[white]0").SetExpansion(1))
-		table.SetCell(row+1, 3, tview.NewTableCell(statusColor+status).SetExpansion(1))
+		table.SetCell(row+1, 3, tview.NewTableCell(color+status).SetExpansion(1))
 	}
 
 	table.SetTitle(fmt.Sprintf(" [white]Realms [%d] ", len(realms))).
-		SetTitleColor(tcell.ColorWhite).
-		SetTitleAlign(tview.AlignCenter)
+		SetTitleColor(tcell.ColorWhite).SetTitleAlign(tview.AlignCenter)
 
-	table.SetSelectedFunc(func(row, col int) {
+	table.SetSelectedFunc(func(row, _ int) {
 		if row > 0 && row-1 < len(realms) {
 			s.showRealmSessions(table, realms[row-1])
 		}
 	})
-
-	s.setupTableInput(table, func() {
-	})
+	s.setupTableInput(table, nil)
 }
 
 func (s *ScreenManager) buildRouterTable() *tview.Table {
-	table := tview.NewTable()
-	table.SetSelectable(true, false)
-	table.SetFixed(1, 1)
-	table.SetBorder(true)
-	table.SetBorderColor(tcell.ColorBlue)
-
+	table := tview.NewTable().SetSelectable(true, false).SetFixed(1, 1)
+	table.SetBorder(true).SetBorderColor(tcell.ColorBlue)
 	s.showAllRealms(table)
-
 	return table
 }
 
@@ -233,15 +250,8 @@ func (s *ScreenManager) setupTableInput(table *tview.Table, onEsc func()) {
 
 func (s *ScreenManager) Run() error {
 	flex := tview.NewFlex().SetDirection(tview.FlexRow)
-
-	info := tview.NewTextView().
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignLeft)
-
-	logo := tview.NewTextView().
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignRight).
-		SetText(`[cyan]
+	info := tview.NewTextView().SetDynamicColors(true).SetTextAlign(tview.AlignLeft)
+	logo := tview.NewTextView().SetDynamicColors(true).SetTextAlign(tview.AlignRight).SetText(`[cyan]
 ██╗  ██╗████████╗ ██████╗ ██████╗ 
 ╚██╗██╔╝╚══██╔══╝██╔═══██╗██╔══██╗
  ╚███╔╝    ██║   ██║   ██║██████╔╝
@@ -297,14 +307,18 @@ func (s *ScreenManager) Run() error {
 		}
 	}()
 
-	eventHandler := func(event *xconn.Event) {
-		statsDict, err := event.ArgDict(0)
+	eventHandler := func(ev *xconn.Event) {
+		select {
+		case <-s.shutdown:
+			return
+		default:
+		}
+		statsDict, err := ev.ArgDict(0)
 		if err != nil {
 			return
 		}
-		statsMap := statsDict.Raw()
 		select {
-		case statsUpdates <- statsMap:
+		case statsUpdates <- statsDict.Raw():
 		default:
 		}
 	}
@@ -315,12 +329,18 @@ func (s *ScreenManager) Run() error {
 	}
 
 	err := s.app.SetRoot(flex, true).EnableMouse(true).Run()
-	s.Stop()
+	if s.shutdown != nil {
+		s.Stop()
+	}
 	return err
 }
 
 func (s *ScreenManager) Stop() {
+	if s.shutdown == nil {
+		return
+	}
 	close(s.shutdown)
+	s.shutdown = nil
 	if s.app != nil {
 		s.app.Stop()
 	}
