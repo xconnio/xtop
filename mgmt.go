@@ -3,7 +3,6 @@ package xtop
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"sync"
 
 	"github.com/xconnio/xconn-go"
@@ -111,7 +110,6 @@ func (m *ManagementAPI) FetchSessionLogs(realm string, sessionID uint64, onLog f
 		if err != nil {
 			return
 		}
-		defer func() { _ = recover() }()
 		onLog(msg)
 	}
 
@@ -129,11 +127,6 @@ func (m *ManagementAPI) FetchSessionLogs(realm string, sessionID uint64, onLog f
 
 func (m *ManagementAPI) StopSessionLogs() {
 	go func() {
-		defer func() {
-			if err := recover(); err != nil {
-				log.Printf("Recovered from panic: %v", err)
-			}
-		}()
 		resp := m.session.Call(xconn.ManagementProcedureSessionLogSet).
 			Kwarg("enable", false).Do()
 		if resp.Err != nil {

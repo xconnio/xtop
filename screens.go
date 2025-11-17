@@ -23,7 +23,6 @@ type ScreenManager struct {
 	app      *tview.Application
 	mgmt     *ManagementAPI
 	shutdown chan struct{}
-	wg       sync.WaitGroup
 }
 
 func NewScreenManager(session *xconn.Session) *ScreenManager {
@@ -81,9 +80,7 @@ func (s *ScreenManager) showSessionLogs(table *tview.Table, realm string, sessio
 	active := true
 	logUpdates := make(chan string, 500)
 
-	s.wg.Add(1)
 	go func() {
-		defer s.wg.Done()
 		row := 1
 		var buffer []string
 		var mu sync.Mutex
@@ -275,9 +272,7 @@ func (s *ScreenManager) Run() error {
 
 	statsUpdates := make(chan map[string]interface{}, 10)
 
-	s.wg.Add(1)
 	go func() {
-		defer s.wg.Done()
 		defer close(statsUpdates)
 
 		for {
@@ -347,5 +342,4 @@ func (s *ScreenManager) Stop() {
 	if s.mgmt != nil {
 		s.mgmt.Close()
 	}
-	s.wg.Wait()
 }
