@@ -20,17 +20,19 @@ const (
 )
 
 type ScreenManager struct {
-	app      *tview.Application
-	mgmt     *ManagementAPI
-	shutdown chan struct{}
+	app        *tview.Application
+	mgmt       *ManagementAPI
+	shutdown   chan struct{}
+	logChannel chan struct{}
 }
 
 func NewScreenManager(session *xconn.Session) *ScreenManager {
 	app := tview.NewApplication()
 	return &ScreenManager{
-		app:      app,
-		mgmt:     NewManagementAPI(session),
-		shutdown: make(chan struct{}),
+		app:        app,
+		mgmt:       NewManagementAPI(session),
+		shutdown:   make(chan struct{}),
+		logChannel: make(chan struct{}, 1),
 	}
 }
 
@@ -125,7 +127,7 @@ func (s *ScreenManager) showSessionLogs(table *tview.Table, realm string, sessio
 					}
 					table.ScrollToEnd()
 				})
-			case <-s.shutdown:
+			case <-s.logChannel:
 				return
 			}
 		}
@@ -157,14 +159,12 @@ func (s *ScreenManager) showSessionLogs(table *tview.Table, realm string, sessio
 	table.SetTitle(fmt.Sprintf(" [white]%s - Session %d Logs ", realm, sessionID)).
 		SetTitleColor(tcell.ColorWhite).SetTitleAlign(tview.AlignCenter)
 
-	var once sync.Once
 	s.setupTableInput(table, func() {
-		once.Do(func() {
-			active = false
-			s.mgmt.StopSessionLogs()
-			close(logUpdates)
-			s.showRealmSessions(table, realm)
-		})
+		s.logChannel <- struct{}{}
+		active = false
+		s.mgmt.StopSessionLogs()
+		close(logUpdates)
+		s.showRealmSessions(table, realm)
 	})
 }
 
@@ -335,6 +335,7 @@ func (s *ScreenManager) Stop() {
 		return
 	}
 	close(s.shutdown)
+	close(s.logChannel)
 	s.shutdown = nil
 	if s.app != nil {
 		s.app.Stop()
