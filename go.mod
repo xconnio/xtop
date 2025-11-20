@@ -6,6 +6,7 @@ require (
 	github.com/gdamore/tcell/v2 v2.8.1
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/rivo/tview v0.42.0
+	github.com/sirupsen/logrus v1.9.3
 	github.com/xconnio/xconn-go v0.0.0-20251108143232-364781a4f29a
 )
 
@@ -24,7 +25,6 @@ require (
 	github.com/projectdiscovery/utils v0.7.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/shirou/gopsutil v3.21.11+incompatible // indirect
-	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect

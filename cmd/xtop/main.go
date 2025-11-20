@@ -27,6 +27,10 @@ func main() {
 		log.Fatalf("failed to connect: %v", err)
 	}
 
+	if err := xtop.SetupLogger(xtop.LogPath); err != nil {
+		log.Fatalf("failed to setup logger: %v", err)
+	}
+
 	screensMgr := xtop.NewScreenManager(session)
 	if err = screensMgr.Run(); err != nil {
 		log.Fatalf("app run failed: %v", err)

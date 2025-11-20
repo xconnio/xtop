@@ -47,6 +47,7 @@ func (m *ManagementAPI) Realms() ([]string, error) {
 			realms = append(realms, name)
 		}
 	}
+	log.WithField("realms_count", len(realms)).Debug("Realms fetched successfully")
 	return realms, nil
 }
 
@@ -55,7 +56,9 @@ func (m *ManagementAPI) SessionsCount(realm string) (uint64, error) {
 	if resp.Err != nil {
 		return 0, resp.Err
 	}
-	return resp.KwargUInt64Or("total", 0), nil
+	count := resp.KwargUInt64Or("total", 0)
+	log.WithField("realm", realm).WithField("count", count).Debug("Sessions count fetched")
+	return count, nil
 }
 
 func (m *ManagementAPI) SessionDetailsByRealm(realm string) ([]SessionDetails, error) {
@@ -74,6 +77,7 @@ func (m *ManagementAPI) SessionDetailsByRealm(realm string) ([]SessionDetails, e
 			return nil, err
 		}
 	}
+	log.WithField("realm", realm).WithField("sessions_count", len(sessions)).Debug("Session details fetched successfully")
 	return sessions, nil
 }
 
@@ -99,10 +103,12 @@ func (m *ManagementAPI) FetchSessionLogs(realm string, sessionID uint64, onLog f
 	handler := func(ev *xconn.Event) {
 		d, err := ev.ArgDict(0)
 		if err != nil {
+			log.WithError(err).Debug("Failed to get event dictionary")
 			return
 		}
 		msg, err := d.String("message")
 		if err != nil {
+			log.WithError(err).Debug("Failed to get message from event")
 			return
 		}
 		onLog(msg)
@@ -115,8 +121,12 @@ func (m *ManagementAPI) FetchSessionLogs(realm string, sessionID uint64, onLog f
 
 	go func() {
 		<-m.shutdown
+		log.WithField("realm", realm).WithField("session_id", sessionID).Debug(
+			"Unsubscribing from session logs")
 		_ = sub.Unsubscribe()
 	}()
+
+	log.WithField("realm", realm).WithField("session_id", sessionID).Debug("Session logs subscription established")
 	return nil
 }
 
@@ -125,8 +135,10 @@ func (m *ManagementAPI) StopSessionLogs() {
 	resp := m.session.Call(xconn.ManagementProcedureSessionLogSet).
 		Kwarg("enable", false).Do()
 	if resp.Err != nil {
+		log.WithError(resp.Err).Error("Failed to stop session logs")
 		return
 	}
+	log.Debug("Session logs stopped successfully")
 }
 
 func (m *ManagementAPI) Close() {
@@ -136,6 +148,7 @@ func (m *ManagementAPI) Close() {
 		return
 	}
 	m.closed = true
+	log.Debug("Closing ManagementAPI")
 	close(m.shutdown)
 	m.Unlock()
 }
