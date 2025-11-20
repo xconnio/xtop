@@ -97,11 +97,6 @@ func (m *ManagementAPI) FetchSessionLogs(realm string, sessionID uint64, onLog f
 	}
 
 	handler := func(ev *xconn.Event) {
-		select {
-		case <-m.shutdown:
-			return
-		default:
-		}
 		d, err := ev.ArgDict(0)
 		if err != nil {
 			return
@@ -126,13 +121,12 @@ func (m *ManagementAPI) FetchSessionLogs(realm string, sessionID uint64, onLog f
 }
 
 func (m *ManagementAPI) StopSessionLogs() {
-	go func() {
-		resp := m.session.Call(xconn.ManagementProcedureSessionLogSet).
-			Kwarg("enable", false).Do()
-		if resp.Err != nil {
-			return
-		}
-	}()
+	m.shutdown <- struct{}{}
+	resp := m.session.Call(xconn.ManagementProcedureSessionLogSet).
+		Kwarg("enable", false).Do()
+	if resp.Err != nil {
+		return
+	}
 }
 
 func (m *ManagementAPI) Close() {
