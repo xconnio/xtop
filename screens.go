@@ -2,7 +2,6 @@ package xtop
 
 import (
 	"fmt"
-	"log"
 	"math"
 	"sync"
 	"time"
@@ -48,6 +47,7 @@ func (s *ScreenManager) showRealmSessions(table *tview.Table, realm string) {
 
 	sessions, err := s.mgmt.SessionDetailsByRealm(realm)
 	if err != nil {
+		log.WithField("realm", realm).WithError(err).Error("Failed to fetch realm sessions")
 		table.SetCell(1, 0, tview.NewTableCell(fmt.Sprintf("[red]%s", err.Error())))
 		return
 	}
@@ -67,13 +67,17 @@ func (s *ScreenManager) showRealmSessions(table *tview.Table, realm string) {
 			return
 		}
 		selected := sessions[row-1]
+		log.WithField("realm", realm).WithField("session_id", selected.SessionID).Debug("Selected session for log viewing")
 		s.showSessionLogs(table, realm, selected.SessionID)
 	})
 
-	s.setupTableInput(table, func() { s.showAllRealms(table) })
+	s.setupTableInput(table, func() {
+		s.showAllRealms(table)
+	})
 }
 
 func (s *ScreenManager) showSessionLogs(table *tview.Table, realm string, sessionID uint64) {
+	log.WithField("realm", realm).WithField("session_id", sessionID).Debug("Showing session logs")
 	table.Clear()
 	table.SetCell(0, 0, tview.NewTableCell("[yellow::b]SESSION LOGS").
 		SetAlign(tview.AlignLeft).SetSelectable(false))
@@ -128,6 +132,7 @@ func (s *ScreenManager) showSessionLogs(table *tview.Table, realm string, sessio
 					table.ScrollToEnd()
 				})
 			case <-s.logChannel:
+				log.Debug("Session logs goroutine shutting down")
 				return
 			}
 		}
@@ -153,6 +158,7 @@ func (s *ScreenManager) showSessionLogs(table *tview.Table, realm string, sessio
 
 	err := s.mgmt.FetchSessionLogs(realm, sessionID, sendLog)
 	if err != nil {
+		log.WithField("realm", realm).WithField("session_id", sessionID).WithError(err).Error("Failed to fetch session logs")
 		table.SetCell(1, 0, tview.NewTableCell(fmt.Sprintf("[red]subscribe to session logs failed: %v", err)))
 	}
 
@@ -179,6 +185,7 @@ func (s *ScreenManager) showAllRealms(table *tview.Table) {
 
 	realms, err := s.mgmt.Realms()
 	if err != nil {
+		log.WithError(err).Error("Failed to fetch realms")
 		table.SetCell(1, 0, tview.NewTableCell("[red]Error fetching realms"))
 		return
 	}
@@ -192,6 +199,7 @@ func (s *ScreenManager) showAllRealms(table *tview.Table) {
 		if err != nil {
 			status = StatusOffline
 			clients = 0
+			log.WithField("realm", realm).WithError(err).Error("Failed to fetch sessions count")
 		}
 
 		color := map[string]string{
@@ -211,7 +219,9 @@ func (s *ScreenManager) showAllRealms(table *tview.Table) {
 
 	table.SetSelectedFunc(func(row, _ int) {
 		if row > 0 && row-1 < len(realms) {
-			s.showRealmSessions(table, realms[row-1])
+			selectedRealm := realms[row-1]
+			log.WithField("realm", selectedRealm).Debug("Selected realm for detailed view")
+			s.showRealmSessions(table, selectedRealm)
 		}
 	})
 	s.setupTableInput(table, nil)
@@ -234,10 +244,12 @@ func (s *ScreenManager) setupTableInput(table *tview.Table, onEsc func()) {
 			}
 		case tcell.KeyRune:
 			if ev.Rune() == 'q' {
+				log.Debug("Quit requested via keypress")
 				s.Stop()
 				return nil
 			}
 		case tcell.KeyCtrlC:
+			log.Debug("Quit requested via Ctrl+C")
 			s.Stop()
 			return nil
 		}
@@ -267,7 +279,7 @@ func (s *ScreenManager) Run() error {
 	flex.AddItem(table, 0, 1, true)
 
 	if err := s.mgmt.RequestStats(); err != nil {
-		log.Printf("failed to request stats: %v", err)
+		log.WithError(err).Error("Failed to request stats")
 	}
 
 	statsUpdates := make(chan map[string]interface{}, 10)
@@ -297,6 +309,7 @@ func (s *ScreenManager) Run() error {
 						s.mgmt.session.ID()))
 				})
 			case <-s.shutdown:
+				log.Debug("Stats updates goroutine shutting down")
 				return
 			}
 		}
@@ -310,17 +323,19 @@ func (s *ScreenManager) Run() error {
 		}
 		statsDict, err := ev.ArgDict(0)
 		if err != nil {
+			log.WithError(err).Debug("Failed to parse stats event")
 			return
 		}
 		select {
 		case statsUpdates <- statsDict.Raw():
 		default:
+			log.Debug("Stats updates channel full, dropping update")
 		}
 	}
 
 	subResp := s.mgmt.session.Subscribe(xconn.ManagementTopicStats, eventHandler).Do()
 	if subResp.Err != nil {
-		log.Printf("Error subscribing to stats: %v", subResp.Err)
+		log.WithError(subResp.Err).Error("Error subscribing to stats")
 	}
 
 	err := s.app.SetRoot(flex, true).EnableMouse(true).Run()
@@ -343,4 +358,5 @@ func (s *ScreenManager) Stop() {
 	if s.mgmt != nil {
 		s.mgmt.Close()
 	}
+	log.Debug("ScreenManager stopped")
 }
